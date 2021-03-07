@@ -1,0 +1,91 @@
+---
+- hosts: all
+  tasks:
+    - name: Set hostname
+      shell: hostnamectl set-hostname "{{ hostname }}.arlab.pw"
+    - name: Set timezone 
+      timezone:
+        name: Europe/Moscow
+# ddnsclient start configure
+    - name: copy ddnsclient config
+      copy: src=ddclient.conf dest=/etc mode=700
+    - name: copy ddnsclient for daemon
+      copy: src=ddclient dest=/etc/default mode=700
+    - name:  replace HOSTNAME
+      replace:
+        path: /etc/ddclient.conf
+        regexp: ^HOSTNAME
+        replace: "{{ hostname }}"
+    - name: install dynamic dns client
+      apt: pkg=ddclient state=latest update_cache=yes
+    - name: register service
+      shell: |
+        systemctl enable ddclient.service
+        systemctl restart ddclient.service
+# ddnsclient end
+    - name: install fail2ban package
+      apt: pkg=fail2ban state=latest
+    - name: copy fail2ban local config
+      copy: remote_src=yes src=/etc/fail2ban/jail.conf dest=/etc/fail2ban/jail.local owner=root group=root mode=0644
+    - name: Update and upgrade apt packages
+      become: true
+      apt:
+        upgrade: "yes"
+        update_cache: "yes"
+        cache_valid_time: 86400 #One day
+    - name: Preparation completed
+      debug: msg="Preparation Completed"
+    - name: Include vars
+      include_vars:
+        file: config.yaml
+    - name: Install packages 1
+      apt:
+        name: ['apache2', 'mariadb-server', 'sendmail', 'php7.4', 'libapache2-mod-php7.4', 'php-mysql']
+        state: latest
+    - name: Install packages 2
+      apt:
+        name: ['php-curl', 'php-json', 'php-cgi', 'php-gd', 'php-zip', 'php-mbstring', 'php-xml', 'php-xmlrpc']
+        state: latest
+    - name: Configure Apache
+      shell: |
+        echo "<?php phpinfo(); ?>" > {{ wwwdir }}/phpinfo.php
+        a2dismod mpm_event
+        a2dismod mpm_worker
+        a2enmod mpm_prefork
+        a2enmod rewrite
+        a2enmod ssl
+        a2ensite default-ssl
+        sed -i 's/short_open_tag = Off/short_open_tag = On/g' /etc/php/7.4/apache2/php.ini
+        systemctl restart apache2
+    - name: Configure MySql
+      shell: |
+        mysql -e "CREATE USER {{ wpdbusername }}@localhost IDENTIFIED BY '{{ wpdbuserpass }}';"
+        mysql -e "GRANT ALL PRIVILEGES ON {{ wpdbname }}.* TO '{{ wpdbusername }}'@'localhost';"
+        mysql -e "FLUSH PRIVILEGES;"
+    - name: Remove file
+      file:
+        path: "{{ wwwdir }}/index.html"
+        state: absent
+    - name: Install wp_cli
+      shell: |
+        cd /tmp
+        curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar &>/dev/null
+    - copy: remote_src=True src=/tmp/wp-cli.phar dest=/usr/local/bin/wp
+    - file: path=/tmp/wp-cli.phar state=absent
+    - file: 
+        path: "/usr/local/bin/wp"
+        mode: "+x"
+    - name: Configure Wordpress
+      shell: |
+        wp --allow-root --path={{ wwwdir }} core download
+        wp --allow-root --path={{ wwwdir }} config create --dbname={{ wpdbname }} --dbuser={{ wpdbusername }} --dbpass={{ wpdbuserpass }}
+        wp --allow-root --path={{ wwwdir }} db create 
+        wp --allow-root --path={{ wwwdir }} core install  --path={{ wwwdir }} --url={{ siteurl }} --title="{{ sitename }}" --admin_user={{ wpusername }} --admin_password={{ wpuserpass }} --admin_email={{wpuseremail}}
+        echo "define( 'FS_METHOD', 'direct' );" >> {{ wwwdir }}/wp-config.php
+        addr=$(dig sfwpstage.arlab.pw | grep -v ";" | awk '{print $5}')
+        echo $addr {{siteurl}} >> /etc/hosts
+    - file: dest="{{ wwwdir }}" owner=root group=www-data recurse=yes
+    - file: dest="{{ wwwdir }}/wp-content/" mode=g+w recurse=yes
+    - file: 
+        path: "{{ wwwdir }}/wp-config.php"
+        mode: '440'

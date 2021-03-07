@@ -1,0 +1,9 @@
+wpdbname: dbwpsf
+wpdbusername: dbuwpsf
+wpdbuserpass: dbuPaSF21
+siteurl: sfwpstage.arlab.pw
+sitename: sf__wordpress_staging
+wpusername: odmin
+wpuserpass: WPaSF21
+wpuseremail: "razumov@gmail.com"
+wwwdir: /var/www/html
